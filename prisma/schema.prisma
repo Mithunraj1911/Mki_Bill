@@ -1,0 +1,111 @@
+// Prisma schema for Digital Bill Management Portal
+// Uses Supabase Postgres.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+/// Main bills table - one row per submitted bill.
+model Bill {
+  id            String   @id @default(cuid())
+  /// Human-readable unique bill id, e.g. BILL-2026-00001. Generated server-side for concurrency safety.
+  billId        String   @unique
+  submissionDate String
+  companyName   String
+  billNumber    String
+  billDate      String
+  /// Stored as integer paise to avoid floating point issues; convert to rupees on read.
+  basicAmount   Int
+  submittedBy   String
+  department    String?
+  description   String?
+  /// Path under /public/uploads where the bill document is stored.
+  billDocumentPath String?
+  billDocumentName String?
+  billDocumentMime  String?
+  /// Receiver details (set when receipt is confirmed).
+  receiverName  String?
+  signaturePath String?
+  signatureType String?
+  receivedAt    DateTime?
+  /// Optional location fields for future use (not required in v1).
+  receivedLatitude  Float?
+  receivedLongitude Float?
+  /// DRAFT | SUBMITTED | RECEIVED | COMPLETED | CANCELLED
+  status        String   @default("SUBMITTED")
+  /// Soft-delete support.
+  deletedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  history       BillHistory[]
+
+  @@index([billId])
+  @@index([submissionDate])
+  @@index([companyName])
+  @@index([billNumber])
+  @@index([submittedBy])
+  @@index([receiverName])
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// Audit trail - one row per important action on a bill.
+model BillHistory {
+  id         String   @id @default(cuid())
+  billId     String
+  /// Bill.billId (human-readable), not the PK.
+  billRefId  String
+  /// CREATED | UPDATED | DOCUMENT_UPLOADED | SIGNATURE_CAPTURED | RECEIPT_CONFIRMED | STATUS_CHANGED | EXPORTED | DELETED
+  action     String
+  oldStatus  String?
+  newStatus  String?
+  performedBy String?
+  /// JSON-encoded metadata.
+  metadata   String?
+  createdAt  DateTime @default(now())
+
+  bill       Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+/// Logs of generated weekly reports. Unique on (reportType, periodStart, periodEnd) to prevent duplicates.
+model ReportLog {
+  id            String    @id @default(cuid())
+  reportType    String
+  periodStart   String
+  periodEnd     String
+  filePath      String?
+  /// Total bill count covered by the report.
+  totalBills    Int       @default(0)
+  /// Total amount in paise.
+  totalAmount   Int       @default(0)
+  emailSent     Boolean   @default(false)
+  emailError    String?
+  sentAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@unique([reportType, periodStart, periodEnd])
+}
+
+/// Application settings - a single-row table (id = "default").
+model AppSetting {
+  id              String   @id @default("default")
+  companyName     String   @default("Munjal Kiriu Industries")
+  companyAddress  String   @default("")
+  currency        String   @default("INR")
+  reportEmailTo   String   @default("")
+  reportEmailCc   String   @default("")
+  weeklyReportDay String   @default("Sunday")
+  weeklyReportTime String  @default("18:00")
+  updatedAt       DateTime @updatedAt
+}
