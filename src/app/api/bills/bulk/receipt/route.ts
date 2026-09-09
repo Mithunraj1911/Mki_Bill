@@ -107,7 +107,7 @@ export async function POST(req: NextRequest) {
         results.push(updated);
       }
       return results;
-    });
+    }, { timeout: 20000, maxWait: 10000 });
 
     return NextResponse.json({
       bills: updatedBills.map(mapBill),

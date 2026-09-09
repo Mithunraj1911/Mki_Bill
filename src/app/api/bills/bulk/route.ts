@@ -6,6 +6,11 @@
 //
 // All bills are created atomically: if any row fails, the entire batch is rolled back.
 // Each created bill is in SUBMITTED status and can be acknowledged individually afterwards.
+//
+// IMPORTANT: bill IDs are reserved and the shared document is uploaded to Supabase Storage
+// BEFORE the database transaction opens. Storage uploads are network calls — doing them inside
+// an interactive Prisma transaction risks the transaction timing out and closing while we're
+// still using it (see the single-bill route for the same fix, with more detail).
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
@@ -40,29 +45,53 @@ export async function POST(req: NextRequest) {
     const dept = payload.department?.trim() || null;
     const desc = payload.description?.trim() || null;
 
-    // Pre-compute document storage (shared across all bills in the batch — we write the file
-    // once per bill so each bill has its own folder, but with the same content).
+    // Reserve one bill id per entry up front (sequential), outside any transaction.
+    // generateBillId() looks at what's already committed in the DB — since none of this
+    // batch's bills are committed yet, we ask it once for the next number and then increment
+    // locally in memory for the rest of the batch (mirrors the single-bill route's guarantees).
+    const year = yearOf(payload.submissionDate);
+    const firstBillId = await generateBillId(year);
+    const prefix = `BILL-${year}-`;
+    const firstSeq = parseInt(firstBillId.slice(prefix.length), 10);
+    const billIds: string[] = payload.entries.map((_, i) =>
+      `${prefix}${String(firstSeq + i).padStart(5, '0')}`
+    );
+
+    // Pre-compute and upload the shared document ONCE per bill (each bill gets its own copy
+    // in storage, all with identical content) — entirely before the transaction starts.
     let documentMime: string | null = null;
     let documentName: string | null = null;
-    let documentDataUrl: string | null = null;
-    let documentExt = 'bin';
+    const documentPaths: (string | null)[] = new Array(payload.entries.length).fill(null);
     if (document?.dataUrl) {
       documentMime = document.mime || 'application/octet-stream';
+      let documentExt = 'bin';
       if (documentMime === 'application/pdf') documentExt = 'pdf';
       else if (documentMime === 'image/png') documentExt = 'png';
       else if (documentMime === 'image/jpeg' || documentMime === 'image/jpg') documentExt = 'jpg';
       documentName = document.name || `bill-document.${documentExt}`;
-      documentDataUrl = document.dataUrl;
+      const safeName = `document.${documentExt}`;
+
+      for (let i = 0; i < payload.entries.length; i++) {
+        try {
+          const nested = billDocumentNestedPath(billIds[i], payload.submissionDate);
+          const saved = await saveDataUrl('bill-documents', nested, safeName, document.dataUrl);
+          documentPaths[i] = saved.publicUrl;
+        } catch (e) {
+          console.error('[POST /api/bills/bulk] document upload failed for', billIds[i], e);
+          // Continue without a document for this bill — it will still be created.
+        }
+      }
     }
 
     const created: CreatedBill[] = [];
 
-    // Run everything inside a single transaction so the batch is atomic.
+    // Run all DB writes inside a single transaction so the batch is atomic. No network calls
+    // (storage uploads) happen in here anymore — only fast, local Postgres queries.
     await db.$transaction(async (tx) => {
-      const year = yearOf(payload.submissionDate);
-
-      for (const entry of payload.entries) {
-        const billId = await generateBillId(year, tx);
+      for (let i = 0; i < payload.entries.length; i++) {
+        const entry = payload.entries[i];
+        const billId = billIds[i];
+        const documentPath = documentPaths[i];
 
         const bill = await tx.bill.create({
           data: {
@@ -76,6 +105,9 @@ export async function POST(req: NextRequest) {
             department: dept,
             description: desc,
             status: 'SUBMITTED' as BillStatus,
+            billDocumentPath: documentPath,
+            billDocumentName: documentPath ? documentName : null,
+            billDocumentMime: documentPath ? documentMime : null,
           },
         });
 
@@ -94,30 +126,11 @@ export async function POST(req: NextRequest) {
         });
         if (dup) duplicateBillId = dup.billId;
 
-        // Save the shared document for this bill (each bill gets its own copy)
-        let documentPath: string | null = null;
-        if (documentDataUrl) {
-          const safeName = `document.${documentExt}`;
-          const nested = billDocumentNestedPath(billId, payload.submissionDate);
-          try {
-            const saved = await saveDataUrl('bill-documents', nested, safeName, documentDataUrl);
-            documentPath = saved.publicUrl;
-            await tx.bill.update({
-              where: { id: bill.id },
-              data: {
-                billDocumentPath: documentPath,
-                billDocumentName: documentName,
-                billDocumentMime: documentMime,
-              },
-            });
-            await recordHistory(tx, bill.id, billId, 'DOCUMENT_UPLOADED', {
-              newStatus: 'SUBMITTED',
-              metadata: { documentName, documentMime, documentPath },
-            });
-          } catch (e) {
-            console.error('[POST /api/bills/bulk] document save failed', e);
-            // Continue without document — the bill is still created
-          }
+        if (documentPath) {
+          await recordHistory(tx, bill.id, billId, 'DOCUMENT_UPLOADED', {
+            newStatus: 'SUBMITTED',
+            metadata: { documentName, documentMime, documentPath },
+          });
         }
 
         await recordHistory(tx, bill.id, billId, 'CREATED', {
@@ -135,7 +148,7 @@ export async function POST(req: NextRequest) {
         if (!fullRow) throw new Error('Failed to read back created bill');
         created.push({ row: fullRow, billId, duplicateBillId });
       }
-    });
+    }, { timeout: 20000, maxWait: 10000 });
 
     return NextResponse.json(
       {

@@ -39,10 +39,32 @@ export async function POST(req: NextRequest) {
       take: 1,
     });
 
-    const result = await db.$transaction(async (tx) => {
-      const year = yearOf(payload.submissionDate);
-      const billId = await generateBillId(year, tx);
+    // Generate the bill id and upload the document (if any) BEFORE opening the DB
+    // transaction. Storage uploads are a network call to Supabase and must never happen
+    // inside an interactive Prisma transaction — over a pooled connection (pgbouncer) the
+    // added latency can exceed the transaction's timeout and it gets closed out from under us.
+    const year = yearOf(payload.submissionDate);
+    const billId = await generateBillId(year);
 
+    let documentPath: string | null = null;
+    let documentName: string | null = null;
+    let documentMime: string | null = null;
+    if (document?.dataUrl) {
+      const mime = document.mime || 'application/octet-stream';
+      let ext = 'bin';
+      if (mime === 'application/pdf') ext = 'pdf';
+      else if (mime === 'image/png') ext = 'png';
+      else if (mime === 'image/jpeg' || mime === 'image/jpg') ext = 'jpg';
+      const originalName = document.name || `bill-document.${ext}`;
+      const safeName = `document.${ext}`;
+      const nested = billDocumentNestedPath(billId, payload.submissionDate);
+      const saved = await saveDataUrl('bill-documents', nested, safeName, document.dataUrl);
+      documentPath = saved.publicUrl;
+      documentName = originalName;
+      documentMime = mime;
+    }
+
+    const result = await db.$transaction(async (tx) => {
       const bill = await tx.bill.create({
         data: {
           billId,
@@ -55,29 +77,13 @@ export async function POST(req: NextRequest) {
           department: dept,
           description: desc,
           status: 'SUBMITTED' as BillStatus,
+          billDocumentPath: documentPath,
+          billDocumentName: documentName,
+          billDocumentMime: documentMime,
         },
       });
 
-      let documentPath: string | null = null;
-      let documentName: string | null = null;
-      let documentMime: string | null = null;
-      if (document?.dataUrl) {
-        const mime = document.mime || 'application/octet-stream';
-        let ext = 'bin';
-        if (mime === 'application/pdf') ext = 'pdf';
-        else if (mime === 'image/png') ext = 'png';
-        else if (mime === 'image/jpeg' || mime === 'image/jpg') ext = 'jpg';
-        const originalName = document.name || `bill-document.${ext}`;
-        const safeName = `document.${ext}`;
-        const nested = billDocumentNestedPath(billId, payload.submissionDate);
-        const saved = await saveDataUrl('bill-documents', nested, safeName, document.dataUrl);
-        documentPath = saved.publicUrl;
-        documentName = originalName;
-        documentMime = mime;
-        await tx.bill.update({
-          where: { id: bill.id },
-          data: { billDocumentPath: documentPath, billDocumentName: documentName, billDocumentMime: documentMime },
-        });
+      if (documentPath) {
         await recordHistory(tx, bill.id, billId, 'DOCUMENT_UPLOADED', {
           newStatus: 'SUBMITTED',
           metadata: { documentName, documentMime, documentPath },
