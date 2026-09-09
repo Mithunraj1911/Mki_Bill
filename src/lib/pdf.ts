@@ -4,6 +4,7 @@
 import { jsPDF } from 'jspdf';
 import type { Bill } from '@/lib/types';
 import { formatINR, formatDateDMYFromISO, formatDateTime } from '@/lib/format';
+import { COMPANY_LOGO_PNG_BASE64 } from '@/lib/company-logo';
 
 /** Fetch a remote (Supabase Storage) URL and return it as a base64 data URL. */
 async function fetchAsDataUrl(url: string, fallbackMime: string): Promise<string> {
@@ -27,15 +28,21 @@ export async function buildBillPdfBuffer(bill: Bill, ctx: BillPdfContext): Promi
   const contentW = pageW - margin * 2;
   let y = margin;
 
-  // Header: company name + title
+  // Header: logo + company name + title
+  const logoSize = 14; // mm, square
+  try {
+    doc.addImage(`data:image/png;base64,${COMPANY_LOGO_PNG_BASE64}`, 'PNG', margin, y, logoSize, logoSize);
+  } catch {
+    // If the logo fails to embed for any reason, continue without it — never block PDF generation.
+  }
+  const textX = margin + logoSize + 4;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
-  doc.text(ctx.companyName || 'Digital Bill Management', margin, y + 6);
-  y += 10;
+  doc.text(ctx.companyName || 'Digital Bill Management', textX, y + 6);
   doc.setFontSize(11);
   doc.setFont('helvetica', 'normal');
-  doc.text('Digital Bill Submission Record', margin, y + 2);
-  y += 6;
+  doc.text('Digital Bill Submission Record', textX, y + 12);
+  y += logoSize + 2;
   doc.setDrawColor(180);
   doc.line(margin, y, pageW - margin, y);
   y += 4;

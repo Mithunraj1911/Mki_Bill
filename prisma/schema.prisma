@@ -107,5 +107,12 @@ model AppSetting {
   reportEmailCc   String   @default("")
   weeklyReportDay String   @default("Sunday")
   weeklyReportTime String  @default("18:00")
+  // SMTP email alert configuration (configurable from the Settings UI)
+  smtpEnabled     Boolean  @default(false)
+  smtpHost        String   @default("")
+  smtpPort        Int      @default(587)
+  smtpUser        String   @default("")
+  smtpPassword    String   @default("")
+  fromEmail       String   @default("")
   updatedAt       DateTime @updatedAt
 }

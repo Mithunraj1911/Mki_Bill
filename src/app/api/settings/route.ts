@@ -7,17 +7,7 @@ import { settingsSchema } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 
-async function getOrCreate(): Promise<{
-  id: string;
-  companyName: string;
-  companyAddress: string;
-  currency: string;
-  reportEmailTo: string;
-  reportEmailCc: string;
-  weeklyReportDay: string;
-  weeklyReportTime: string;
-  updatedAt: Date;
-}> {
+async function getOrCreate() {
   let row = await db.appSetting.findUnique({ where: { id: 'default' } });
   if (!row) {
     row = await db.appSetting.create({ data: { id: 'default' } });
@@ -25,18 +15,28 @@ async function getOrCreate(): Promise<{
   return row;
 }
 
+function toResponseShape(row: Awaited<ReturnType<typeof getOrCreate>>) {
+  return {
+    companyName: row.companyName,
+    companyAddress: row.companyAddress,
+    currency: row.currency,
+    reportEmailTo: row.reportEmailTo,
+    reportEmailCc: row.reportEmailCc,
+    weeklyReportDay: row.weeklyReportDay,
+    weeklyReportTime: row.weeklyReportTime,
+    smtpEnabled: row.smtpEnabled,
+    smtpHost: row.smtpHost,
+    smtpPort: row.smtpPort,
+    smtpUser: row.smtpUser,
+    smtpPassword: row.smtpPassword,
+    fromEmail: row.fromEmail,
+  };
+}
+
 export async function GET() {
   try {
     const row = await getOrCreate();
-    return NextResponse.json({
-      companyName: row.companyName,
-      companyAddress: row.companyAddress,
-      currency: row.currency,
-      reportEmailTo: row.reportEmailTo,
-      reportEmailCc: row.reportEmailCc,
-      weeklyReportDay: row.weeklyReportDay,
-      weeklyReportTime: row.weeklyReportTime,
-    });
+    return NextResponse.json(toResponseShape(row));
   } catch (err) {
     console.error('[GET /api/settings]', err);
     return NextResponse.json({ error: 'Unable to load settings.' }, { status: 500 });
@@ -58,15 +58,7 @@ export async function PUT(req: NextRequest) {
       where: { id: 'default' },
       data: parsed.data,
     });
-    return NextResponse.json({
-      companyName: updated.companyName,
-      companyAddress: updated.companyAddress,
-      currency: updated.currency,
-      reportEmailTo: updated.reportEmailTo,
-      reportEmailCc: updated.reportEmailCc,
-      weeklyReportDay: updated.weeklyReportDay,
-      weeklyReportTime: updated.weeklyReportTime,
-    });
+    return NextResponse.json(toResponseShape(updated));
   } catch (err) {
     console.error('[PUT /api/settings]', err);
     return NextResponse.json({ error: 'Unable to save settings.' }, { status: 500 });

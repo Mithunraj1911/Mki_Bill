@@ -11,7 +11,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Save, Building2, Mail, CalendarClock } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Save, Building2, Mail, CalendarClock, Send } from 'lucide-react';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const TIMES = ['06:00', '09:00', '12:00', '15:00', '18:00', '21:00'];
@@ -41,6 +42,33 @@ export function SettingsView() {
       toast.error('Unable to save settings.', { description: e instanceof Error ? e.message : undefined });
     } finally {
       setSaving(false);
+    }
+  }
+
+  const [testEmailAddr, setTestEmailAddr] = useState('');
+  const [sendingTest, setSendingTest] = useState(false);
+
+  async function sendTest() {
+    if (!form) return;
+    if (!testEmailAddr.trim()) {
+      toast.error('Enter an email address to send the test to.');
+      return;
+    }
+    setSendingTest(true);
+    try {
+      await api.sendTestEmail({
+        to: testEmailAddr.trim(),
+        smtpHost: form.smtpHost,
+        smtpPort: form.smtpPort,
+        smtpUser: form.smtpUser,
+        smtpPassword: form.smtpPassword,
+        fromEmail: form.fromEmail,
+      });
+      toast.success('Test email sent.', { description: `Check ${testEmailAddr.trim()}` });
+    } catch (e) {
+      toast.error('Unable to send test email.', { description: e instanceof Error ? e.message : undefined });
+    } finally {
+      setSendingTest(false);
     }
   }
 
@@ -96,30 +124,108 @@ export function SettingsView() {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Mail className="h-4 w-4 text-muted-foreground" />
-            Report Email Recipients
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Mail className="h-4 w-4 text-muted-foreground" />
+              Email Alerts (SMTP)
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="smtp-enabled" className="text-sm font-medium">Enabled</Label>
+              <Switch
+                id="smtp-enabled"
+                checked={form.smtpEnabled}
+                onCheckedChange={(v) => setForm({ ...form, smtpEnabled: v })}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Optional. In-app alerts always work. SMTP config is validated before saving.
+          </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Field label="Report Email (To)" hint="Comma-separated email addresses (e.g. accounts@company.com, mgmt@company.com)">
-            <Input
-              value={form.reportEmailTo}
-              onChange={(e) => setForm({ ...form, reportEmailTo: e.target.value })}
-              placeholder="accounts@company.com, mgmt@company.com"
-            />
-          </Field>
-          <Field label="Report Email (CC)" hint="Comma-separated email addresses (optional)">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="SMTP Host">
+              <Input
+                value={form.smtpHost}
+                onChange={(e) => setForm({ ...form, smtpHost: e.target.value })}
+                placeholder="smtp.office365.com"
+              />
+            </Field>
+            <Field label="SMTP Port">
+              <Input
+                type="number"
+                value={form.smtpPort}
+                onChange={(e) => setForm({ ...form, smtpPort: parseInt(e.target.value, 10) || 0 })}
+                placeholder="587"
+              />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="SMTP User">
+              <Input
+                value={form.smtpUser}
+                onChange={(e) => setForm({ ...form, smtpUser: e.target.value })}
+                placeholder="scan@company.com"
+              />
+            </Field>
+            <Field label="SMTP Password">
+              <Input
+                type="password"
+                value={form.smtpPassword}
+                onChange={(e) => setForm({ ...form, smtpPassword: e.target.value })}
+                placeholder="••••••••"
+              />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="From Email">
+              <Input
+                value={form.fromEmail}
+                onChange={(e) => setForm({ ...form, fromEmail: e.target.value })}
+                placeholder="scan@company.com"
+              />
+            </Field>
+            <Field label="To Email (comma-separated)">
+              <Input
+                value={form.reportEmailTo}
+                onChange={(e) => setForm({ ...form, reportEmailTo: e.target.value })}
+                placeholder="accounts@company.com, mgmt@company.com"
+              />
+            </Field>
+          </div>
+          <Field label="CC Email (optional, comma-separated)">
             <Input
               value={form.reportEmailCc}
               onChange={(e) => setForm({ ...form, reportEmailCc: e.target.value })}
               placeholder="finance@company.com"
             />
           </Field>
-          <p className="text-xs text-muted-foreground bg-muted/40 rounded-md p-3">
-            Note: Sensitive email configuration (Resend API key, sender email) is set via environment variables and not exposed in the UI.
-            Set <code className="font-mono">RESEND_API_KEY</code>, <code className="font-mono">REPORT_FROM_EMAIL</code>, <code className="font-mono">REPORT_EMAIL_TO</code>, <code className="font-mono">REPORT_EMAIL_CC</code>, and <code className="font-mono">CRON_SECRET</code> in your deployment environment.
-          </p>
+
+          <div className="border-t pt-4 space-y-2">
+            <Label className="text-sm font-medium">Send a test email to verify your SMTP configuration</Label>
+            <div className="flex gap-2">
+              <Input
+                value={testEmailAddr}
+                onChange={(e) => setTestEmailAddr(e.target.value)}
+                placeholder="your@email.com"
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void sendTest()}
+                disabled={sendingTest}
+                className="gap-2 shrink-0"
+              >
+                {sendingTest ? (
+                  <span className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+                Send Test Email
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

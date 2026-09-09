@@ -125,6 +125,12 @@ export interface AppSettings {
   reportEmailCc: string;
   weeklyReportDay: string;
   weeklyReportTime: string;
+  smtpEnabled: boolean;
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  smtpPassword: string;
+  fromEmail: string;
 }
 
 export interface BillsListResponse {

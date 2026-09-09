@@ -169,6 +169,22 @@ export const api = {
     }));
   },
 
+  /// Send a one-off test email using the SMTP config currently in the form (unsaved is fine).
+  async sendTestEmail(payload: {
+    to: string;
+    smtpHost: string;
+    smtpPort: number;
+    smtpUser: string;
+    smtpPassword: string;
+    fromEmail: string;
+  }): Promise<{ success: boolean }> {
+    return parseJson(await fetch('/api/settings/test-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }));
+  },
+
   /// Trigger weekly report manually (for testing).
   async triggerWeeklyReport(): Promise<{ success: boolean; message: string; alreadySent?: boolean }> {
     return parseJson(await fetch('/api/reports/weekly?test=true', { method: 'POST' }));

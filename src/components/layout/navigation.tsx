@@ -1,7 +1,7 @@
 'use client';
 
 import { useNav, ViewKey } from '@/lib/nav-store';
-import { LayoutDashboard, Plus, FileText, BarChart3, Settings, Receipt, Layers } from 'lucide-react';
+import { LayoutDashboard, Plus, FileText, BarChart3, Settings, Layers } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
@@ -81,9 +81,7 @@ export function Sidebar() {
   return (
     <aside className="hidden md:flex md:w-60 md:flex-col md:fixed md:inset-y-0 md:border-r bg-sidebar text-sidebar-foreground">
       <div className="flex h-16 items-center gap-2 border-b px-6">
-        <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <Receipt className="h-5 w-5" />
-        </div>
+        <img src="/logo.png" alt="Munjal Kiriu Industries" className="h-9 w-9 rounded-md object-contain" />
         <div className="flex flex-col">
           <span className="text-sm font-semibold leading-none">Digital Bills</span>
           <span className="text-[11px] text-muted-foreground mt-1">Management Portal</span>
@@ -126,8 +124,8 @@ export function Sidebar() {
 export function MobileHeader() {
   return (
     <header className="md:hidden sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/95 backdrop-blur px-4">
-      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-        <Receipt className="h-4 w-4" />
+      <div className="flex h-8 w-8 items-center justify-center">
+        <img src="/logo.png" alt="Munjal Kiriu Industries" className="h-8 w-8 rounded-md object-contain" />
       </div>
       <div className="flex flex-col">
         <span className="text-sm font-semibold leading-none">Digital Bills</span>

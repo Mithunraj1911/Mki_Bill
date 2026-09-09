@@ -1,4 +1,5 @@
-// POST /api/reports/weekly - generate the weekly Excel report, optionally email it via Resend.
+// POST /api/reports/weekly - generate the weekly Excel report, optionally email it via
+// the SMTP settings configured on the Settings page.
 //
 // Protect via CRON_SECRET header (or ?test=true with a dev secret).
 // Idempotent: will not regenerate or resend if report_logs shows an already-sent entry for the period.
@@ -8,6 +9,7 @@ import { db } from '@/lib/db';
 import { buildBillsWorkbook, workbookToBuffer, addSummarySheet, addCompanySummarySheet } from '@/lib/excel';
 import { saveBuffer, reportNestedPath } from '@/lib/storage';
 import { paiseToRupees, previousWeekRange, formatDateDMYFromISO } from '@/lib/format';
+import { sendMail, validateSmtpConfig, type SmtpConfig } from '@/lib/mailer';
 
 export const runtime = 'nodejs';
 
@@ -119,35 +121,41 @@ export async function POST(req: NextRequest) {
     const nested = reportNestedPath(week.end);
     const saved = await saveBuffer('reports', nested, filename, buf);
 
-    // Try to send email (only if Resend key configured)
+    // Try to send email via the SMTP settings configured on the Settings page
     let emailSent = false;
     let emailError: string | undefined;
-    const emailTo = process.env.REPORT_EMAIL_TO || '';
-    const emailCc = process.env.REPORT_EMAIL_CC || '';
-    const fromEmail = process.env.REPORT_FROM_EMAIL || '';
-    const resendKey = process.env.RESEND_API_KEY || '';
+    const settings = await db.appSetting.findUnique({ where: { id: 'default' } });
+    const emailTo = settings?.reportEmailTo || '';
+    const emailCc = settings?.reportEmailCc || '';
 
-    if (resendKey && emailTo && fromEmail) {
+    if (settings?.smtpEnabled && emailTo) {
       try {
         const emailResult = await sendWeeklyEmail({
           to: emailTo,
           cc: emailCc || undefined,
-          from: fromEmail,
           periodStart: week.start,
           periodEnd: week.end,
           totalBills,
           totalAmount,
           attachmentBuffer: buf,
           attachmentFilename: filename,
-          apiKey: resendKey,
+          smtp: {
+            smtpHost: settings.smtpHost,
+            smtpPort: settings.smtpPort,
+            smtpUser: settings.smtpUser,
+            smtpPassword: settings.smtpPassword,
+            fromEmail: settings.fromEmail,
+          },
         });
         emailSent = emailResult.success;
         if (!emailResult.success) emailError = emailResult.error;
       } catch (e) {
         emailError = e instanceof Error ? e.message : 'Unknown email error';
       }
+    } else if (!settings?.smtpEnabled) {
+      emailError = 'Email Alerts (SMTP) is turned off in Settings. Report saved but not emailed.';
     } else {
-      emailError = 'Resend not configured (RESEND_API_KEY/REPORT_EMAIL_TO/REPORT_FROM_EMAIL missing). Report saved but not emailed.';
+      emailError = 'No report recipient configured in Settings (Report Email To). Report saved but not emailed.';
     }
 
     // Log the report
@@ -199,21 +207,24 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/// Send the weekly email via Resend. Uses fetch directly (no extra dep).
+/// Send the weekly email via the configured SMTP server.
 async function sendWeeklyEmail(opts: {
   to: string;
   cc?: string;
-  from: string;
   periodStart: string;
   periodEnd: string;
   totalBills: number;
   totalAmount: number;
   attachmentBuffer: Buffer;
   attachmentFilename: string;
-  apiKey: string;
+  smtp: SmtpConfig;
 }): Promise<{ success: boolean; error?: string }> {
   try {
-    const { to, cc, from, periodStart, periodEnd, totalBills, totalAmount, attachmentBuffer, attachmentFilename, apiKey } = opts;
+    const { to, cc, periodStart, periodEnd, totalBills, totalAmount, attachmentBuffer, attachmentFilename, smtp } = opts;
+
+    const validationError = validateSmtpConfig(smtp);
+    if (validationError) return { success: false, error: validationError };
+
     const subject = `Weekly Digital Bill Submission Report - ${formatDateDMYFromISO(periodStart)} to ${formatDateDMYFromISO(periodEnd)}`;
     const html = `<p>Dear Team,</p>
 <p>Please find attached the weekly Digital Bill Submission Report.</p>
@@ -223,32 +234,19 @@ async function sendWeeklyEmail(opts: {
 <p>The detailed report is attached as an Excel file.</p>
 <p>Regards,<br/>Digital Bill Management System</p>`;
 
-    const body: Record<string, unknown> = {
-      from,
+    await sendMail(smtp, {
       to: to.split(',').map((s) => s.trim()).filter(Boolean),
+      cc: cc ? cc.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
       subject,
       html,
       attachments: [
         {
           filename: attachmentFilename,
-          content: attachmentBuffer.toString('base64'),
+          content: attachmentBuffer,
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         },
       ],
-    };
-    if (cc) body.cc = cc.split(',').map((s) => s.trim()).filter(Boolean);
-
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
     });
-    if (!res.ok) {
-      const text = await res.text();
-      return { success: false, error: `Resend API ${res.status}: ${text.slice(0, 200)}` };
-    }
     return { success: true };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : 'Unknown email error' };
